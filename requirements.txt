@@ -1,3 +1,9 @@
-streamlit==1.36.0
-pandas==2.2.2
-openpyxl==3.1.5
+GovWorx branded Streamlit ROI calculator. Replace /assets with official logos per Brand Guidelines.
+
+
+Logos included:
+- assets/commscoach_logo_reverse.png (used in header)
+- assets/commscoach_logo_navy.png (for light backgrounds)
+
+
+Module selection added: QA, TRAIN, HIRE, ASSIST toggles in sidebar with included-features summary on the page.

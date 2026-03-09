@@ -96,6 +96,17 @@ def build_pdf_report(
     right = width - 0.75 * inch
     y = height - 0.75 * inch
 
+    def new_page():
+        nonlocal y
+        c.showPage()
+        y = height - 0.75 * inch
+
+    def ensure_space(min_y: float):
+        nonlocal y
+        if y < min_y:
+            new_page()
+
+    # Header
     if logo_path and logo_path.exists():
         try:
             img = ImageReader(str(logo_path))
@@ -109,6 +120,7 @@ def build_pdf_report(
     c.drawRightString(right, y - 0.33 * inch, datetime.now().strftime("%Y-%m-%d"))
     y -= 0.85 * inch
 
+    # Agency + modules
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Agency:")
     c.setFont("Helvetica", 12)
@@ -121,26 +133,45 @@ def build_pdf_report(
     c.drawString(left + 1.1 * inch, y, ", ".join(selected_modules) if selected_modules else "Not specified")
     y -= 0.35 * inch
 
+    # Key results (omit 0 values)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Key results (annual)")
     y -= 0.25 * inch
 
-    def draw_kv(label: str, value: str):
+    def draw_kv(label: str, value_str: str, numeric_value: float | None = None):
         nonlocal y
+        if numeric_value is not None and abs(numeric_value) < 1e-9:
+            return
         c.setFont("Helvetica-Bold", 10)
         c.drawString(left, y, label)
         c.setFont("Helvetica", 10)
-        c.drawRightString(right, y, value)
+        c.drawRightString(right, y, value_str)
         y -= 0.18 * inch
 
-    draw_kv("Annual gross savings", money(float(results.get("Annual gross savings ($)", 0) or 0)))
-    draw_kv("Annual investment", money(float(results.get("Annual investment ($)", 0) or 0)))
-    draw_kv("Net annual benefit", money(float(results.get("Net annual benefit ($)", 0) or 0)))
-    draw_kv("ROI", pct_from_ratio(float(results.get("ROI ratio", 0) or 0)))
+    gross = float(results.get("Annual gross savings ($)", 0) or 0)
+    invest = float(results.get("Annual investment ($)", 0) or 0)
+    net = float(results.get("Net annual benefit ($)", 0) or 0)
+    roi = float(results.get("ROI ratio", 0) or 0)
     pb = results.get("Payback months", None)
-    draw_kv("Payback period (months)", f"{float(pb):.1f}" if pb is not None else "N/A")
+
+    draw_kv("Annual gross savings", money(gross), gross)
+    draw_kv("Annual investment", money(invest), invest)
+    draw_kv("Net annual benefit", money(net), net)
+    draw_kv("ROI", pct_from_ratio(roi), roi)
+
+    if pb is not None:
+        try:
+            pb_f = float(pb)
+            if pb_f != 0:
+                draw_kv("Payback period (months)", f"{pb_f:.1f}", pb_f)
+        except Exception:
+            # If it's not numeric and not empty, include it
+            if str(pb).strip():
+                draw_kv("Payback period (months)", str(pb).strip(), None)
+
     y -= 0.10 * inch
 
+    # Savings breakdown (omit rows with 0)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Savings breakdown (annual)")
     y -= 0.25 * inch
@@ -152,27 +183,77 @@ def build_pdf_report(
     y -= 0.12 * inch
     c.setFont("Helvetica", 9)
 
+    any_rows = False
     for _, row in breakdown_df.iterrows():
-        bucket = str(row.get("Bucket", ""))[:70]
         val = float(row.get("Annual Value ($)", 0) or 0)
+        if abs(val) < 1e-9:
+            continue
+        any_rows = True
+        bucket = str(row.get("Bucket", ""))[:70]
         c.drawString(left, y, bucket)
         c.drawRightString(right, y, money(val))
         y -= 0.16 * inch
-        if y < 1.5 * inch:
-            c.showPage()
-            y = height - 0.75 * inch
+        ensure_space(1.5 * inch)
+
+    if not any_rows:
+        c.setFont("Helvetica", 9)
+        c.drawString(left, y, "No savings buckets were included (all were $0).")
+        y -= 0.16 * inch
+
+    y -= 0.20 * inch
+    ensure_space(2.8 * inch)
+
+    # Product summary (selected modules)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(left, y, "Product summary (selected modules)")
+    y -= 0.22 * inch
+    c.setFont("Helvetica", 10)
+
+    if not selected_modules:
+        c.drawString(left, y, "No modules selected.")
+        y -= 0.18 * inch
+    else:
+        for key in selected_modules:
+            item = MODULE_SUMMARIES.get(key)
+            if not item:
+                continue
+            title = item.get("title", key)
+            body = item.get("body", "")
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(left, y, title)
+            y -= 0.16 * inch
             c.setFont("Helvetica", 9)
 
-    y -= 0.15 * inch
-    if y < 2.2 * inch:
-        c.showPage()
-        y = height - 0.75 * inch
+            # Simple wrap
+            wrap_width = 105  # characters, approximate
+            words = body.split()
+            line = ""
+            lines = []
+            for w in words:
+                if len(line) + len(w) + 1 <= wrap_width:
+                    line = (line + " " + w).strip()
+                else:
+                    lines.append(line)
+                    line = w
+            if line:
+                lines.append(line)
 
+            for ln in lines:
+                c.drawString(left, y, ln)
+                y -= 0.14 * inch
+                ensure_space(1.2 * inch)
+
+            y -= 0.10 * inch
+            ensure_space(1.2 * inch)
+
+    y -= 0.10 * inch
+    ensure_space(2.2 * inch)
+
+    # Narrative (always include, but keep short)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "What drives the savings")
     y -= 0.22 * inch
     c.setFont("Helvetica", 10)
-
     bullets = [
         "Reduced supervisor time spent on manual QA review and follow-up.",
         "Reduced dedicated QA labor required to score, document, and trend performance.",
@@ -182,32 +263,32 @@ def build_pdf_report(
     for b in bullets:
         c.drawString(left + 0.12 * inch, y, "- " + b)
         y -= 0.18 * inch
-        if y < 1.0 * inch:
-            c.showPage()
-            y = height - 0.75 * inch
-            c.setFont("Helvetica", 10)
+        ensure_space(1.0 * inch)
 
     y -= 0.10 * inch
-    if y < 1.5 * inch:
-        c.showPage()
-        y = height - 0.75 * inch
+    ensure_space(1.6 * inch)
 
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(left, y, "Estimated time saved")
-    y -= 0.22 * inch
-    c.setFont("Helvetica", 10)
-
+    # Time saved (omit 0 values)
     sup_week = float(inputs.get("Supervisor hours per week spent on QA", 0) or 0)
     sup_red = float(inputs.get("Reduction in supervisor QA time (%)", 0) or 0) / 100.0
     qa_fte = float(inputs.get("Dedicated QA specialists (FTE)", 0) or 0)
     qa_red = float(inputs.get("Reduction in manual QA labor (%)", 0) or 0) / 100.0
+
     sup_hours_saved = sup_week * 52 * sup_red
     qa_hours_saved = qa_fte * 2080 * qa_red
 
-    c.drawString(left + 0.12 * inch, y, f"- Supervisor time saved: ~{sup_hours_saved:,.0f} hours per year")
-    y -= 0.18 * inch
-    c.drawString(left + 0.12 * inch, y, f"- QA labor time saved: ~{qa_hours_saved:,.0f} hours per year")
-    y -= 0.18 * inch
+    if sup_hours_saved > 0 or qa_hours_saved > 0:
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(left, y, "Estimated time saved")
+        y -= 0.22 * inch
+        c.setFont("Helvetica", 10)
+
+        if sup_hours_saved > 0:
+            c.drawString(left + 0.12 * inch, y, f"- Supervisor time saved: ~{sup_hours_saved:,.0f} hours per year")
+            y -= 0.18 * inch
+        if qa_hours_saved > 0:
+            c.drawString(left + 0.12 * inch, y, f"- QA labor time saved: ~{qa_hours_saved:,.0f} hours per year")
+            y -= 0.18 * inch
 
     c.setFont("Helvetica", 8)
     c.drawString(left, 0.6 * inch, "GovWorx | CommsCoach ROI Calculator. Estimates only; results depend on adoption and baseline practices.")

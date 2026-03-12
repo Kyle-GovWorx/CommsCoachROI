@@ -193,7 +193,7 @@ def build_pdf_report(
         c.drawString(left, y, line)
         y -= 0.14 * inch
 
-_pdf_new_page(c, "Assumptions and savings detail")
+    _pdf_new_page(c, "Assumptions and savings detail")
 
     # PAGE 2: ASSUMPTIONS TABLE
     y = height - 1.05 * inch

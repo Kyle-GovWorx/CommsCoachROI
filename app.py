@@ -171,8 +171,29 @@ def build_pdf_report(
     kv("Trainer time saved", f"{float(baseline_estimates.get('training_hours_saved_year', 0) or 0):,.0f} hrs")
 
     c.setFont("Helvetica", 8)
-    c.drawString(left, 0.6 * inch, DISCLAIMER)
-    _pdf_new_page(c, "Assumptions and savings detail")
+    
+    y -= 0.10 * inch
+    if y < 1.7 * inch:
+        y = 1.7 * inch
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(left, y, "Disclaimer")
+    y -= 0.18 * inch
+    c.setFont("Helvetica", 9)
+    words = DISCLAIMER.split()
+    line = ""
+    for w in words:
+        test = (line + " " + w).strip()
+        if len(test) > 95:
+            c.drawString(left, y, line)
+            y -= 0.14 * inch
+            line = w
+        else:
+            line = test
+    if line:
+        c.drawString(left, y, line)
+        y -= 0.14 * inch
+
+_pdf_new_page(c, "Assumptions and savings detail")
 
     # PAGE 2: ASSUMPTIONS TABLE
     y = height - 1.05 * inch
@@ -258,7 +279,6 @@ def build_pdf_report(
         y -= 0.10 * inch
 
     c.setFont("Helvetica", 8)
-    c.drawString(left, 0.6 * inch, DISCLAIMER)
     c.save()
     buf.seek(0)
     return buf.read()

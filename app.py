@@ -13,6 +13,11 @@ from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
+DISCLAIMER = (
+    "These results are estimates based on the specific assumptions and data points provided and are intended for illustrative purposes only. "
+    "They do not constitute a guarantee of actual returns or a promise of future financial performance."
+)
+
 APP_DIR = Path(__file__).parent
 ASSETS = APP_DIR / "assets"
 LOGO_PATH = ASSETS / "commscoach_logo_reverse.png"
@@ -80,15 +85,24 @@ def build_excel_export(inputs: dict, results: dict, breakdown_df: pd.DataFrame) 
     return buf.read()
 
 
+def _pdf_new_page(c: canvas.Canvas, title: str | None = None):
+    c.showPage()
+    if title:
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(0.75 * inch, letter[1] - 0.75 * inch, title)
+
+
 def build_pdf_report(
     agency_name: str,
+    scenario_name: str,
     selected_modules: list,
     inputs: dict,
     results: dict,
     breakdown_df: pd.DataFrame,
+    baseline_estimates: dict,
     logo_path: Path | None = None,
 ) -> bytes:
-    """Printable PDF summary for agency leadership."""
+    """Customer-ready PDF summary with cover page + assumptions."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     width, height = letter
@@ -96,36 +110,31 @@ def build_pdf_report(
     right = width - 0.75 * inch
     y = height - 0.75 * inch
 
-    def new_page():
-        nonlocal y
-        c.showPage()
-        y = height - 0.75 * inch
-
-    def ensure_space(min_y: float):
-        nonlocal y
-        if y < min_y:
-            new_page()
-
-    # Header
+    # COVER PAGE
     if logo_path and logo_path.exists():
         try:
             img = ImageReader(str(logo_path))
-            c.drawImage(img, left, y - 0.55 * inch, width=2.6 * inch, height=0.55 * inch, mask="auto")
+            c.drawImage(img, left, y - 0.55 * inch, width=3.0 * inch, height=0.55 * inch, mask="auto")
         except Exception:
             pass
 
-    c.setFont("Helvetica-Bold", 16)
-    c.drawRightString(right, y - 0.15 * inch, "CommsCoach ROI Summary")
+    c.setFont("Helvetica-Bold", 18)
+    c.drawRightString(right, y - 0.10 * inch, "CommsCoach ROI Summary")
     c.setFont("Helvetica", 10)
-    c.drawRightString(right, y - 0.33 * inch, datetime.now().strftime("%Y-%m-%d"))
-    y -= 0.85 * inch
+    c.drawRightString(right, y - 0.30 * inch, datetime.now().strftime("%Y-%m-%d"))
+    y -= 0.90 * inch
 
-    # Agency + modules
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Agency:")
     c.setFont("Helvetica", 12)
     c.drawString(left + 1.1 * inch, y, agency_name or "Not specified")
-    y -= 0.25 * inch
+    y -= 0.22 * inch
+
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(left, y, "Scenario:")
+    c.setFont("Helvetica", 12)
+    c.drawString(left + 1.1 * inch, y, scenario_name or "Standard")
+    y -= 0.22 * inch
 
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Modules:")
@@ -133,166 +142,123 @@ def build_pdf_report(
     c.drawString(left + 1.1 * inch, y, ", ".join(selected_modules) if selected_modules else "Not specified")
     y -= 0.35 * inch
 
-    # Key results (omit 0 values)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Key results (annual)")
-    y -= 0.25 * inch
+    y -= 0.20 * inch
 
-    def draw_kv(label: str, value_str: str, numeric_value: float | None = None):
+    def kv(label: str, value: str):
         nonlocal y
-        if numeric_value is not None and abs(numeric_value) < 1e-9:
-            return
         c.setFont("Helvetica-Bold", 10)
         c.drawString(left, y, label)
         c.setFont("Helvetica", 10)
-        c.drawRightString(right, y, value_str)
+        c.drawRightString(right, y, value)
         y -= 0.18 * inch
 
-    gross = float(results.get("Annual gross savings ($)", 0) or 0)
-    invest = float(results.get("Annual investment ($)", 0) or 0)
-    net = float(results.get("Net annual benefit ($)", 0) or 0)
-    roi = float(results.get("ROI ratio", 0) or 0)
+    kv("Annual gross savings", money(float(results.get("Annual gross savings ($)", 0) or 0)))
+    kv("Annual investment", money(float(results.get("Annual investment ($)", 0) or 0)))
+    kv("Net annual benefit", money(float(results.get("Net annual benefit ($)", 0) or 0)))
+    kv("ROI", pct_from_ratio(float(results.get("ROI ratio", 0) or 0)))
     pb = results.get("Payback months", None)
-
-    draw_kv("Annual gross savings", money(gross), gross)
-    draw_kv("Annual investment", money(invest), invest)
-    draw_kv("Net annual benefit", money(net), net)
-    draw_kv("ROI", pct_from_ratio(roi), roi)
-
-    if pb is not None:
-        try:
-            pb_f = float(pb)
-            if pb_f != 0:
-                draw_kv("Payback period (months)", f"{pb_f:.1f}", pb_f)
-        except Exception:
-            # If it's not numeric and not empty, include it
-            if str(pb).strip():
-                draw_kv("Payback period (months)", str(pb).strip(), None)
+    kv("Payback period (months)", f"{float(pb):.1f}" if pb is not None else "N/A")
 
     y -= 0.10 * inch
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(left, y, "Estimated time saved (annual)")
+    y -= 0.22 * inch
+    c.setFont("Helvetica", 10)
+    kv("Supervisor time saved", f"{float(baseline_estimates.get('supervisor_hours_saved_year', 0) or 0):,.0f} hrs")
+    kv("QA time saved", f"{float(baseline_estimates.get('qa_hours_saved_year', 0) or 0):,.0f} hrs")
+    kv("Trainer time saved", f"{float(baseline_estimates.get('training_hours_saved_year', 0) or 0):,.0f} hrs")
 
-    # Savings breakdown (omit rows with 0)
+    c.setFont("Helvetica", 8)
+    c.drawString(left, 0.6 * inch, DISCLAIMER)
+    _pdf_new_page(c, "Assumptions and savings detail")
+
+    # PAGE 2: ASSUMPTIONS TABLE
+    y = height - 1.05 * inch
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(left, y, "Assumptions used")
+    y -= 0.22 * inch
+    c.setFont("Helvetica", 9)
+
+    # Assumptions list (top 18 or so)
+    rows = []
+    for k, v in inputs.items():
+        rows.append((str(k), str(v)))
+
+    max_rows = 18
+    for i, (k, v) in enumerate(rows[:max_rows]):
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(left, y, k[:48])
+        c.setFont("Helvetica", 9)
+        c.drawRightString(right, y, v[:40])
+        y -= 0.16 * inch
+        if y < 2.2 * inch:
+            break
+
+    if y < 2.4 * inch:
+        _pdf_new_page(c, "Savings breakdown")
+        y = height - 1.05 * inch
+    else:
+        y -= 0.18 * inch
+
+    # Savings breakdown
     c.setFont("Helvetica-Bold", 12)
     c.drawString(left, y, "Savings breakdown (annual)")
-    y -= 0.25 * inch
+    y -= 0.22 * inch
     c.setFont("Helvetica-Bold", 9)
     c.drawString(left, y, "Bucket")
     c.drawRightString(right, y, "Value")
-    y -= 0.15 * inch
+    y -= 0.14 * inch
     c.line(left, y, right, y)
     y -= 0.12 * inch
     c.setFont("Helvetica", 9)
 
-    any_rows = False
     for _, row in breakdown_df.iterrows():
-        val = float(row.get("Annual Value ($)", 0) or 0)
-        if abs(val) < 1e-9:
-            continue
-        any_rows = True
         bucket = str(row.get("Bucket", ""))[:70]
+        val = float(row.get("Annual Value ($)", 0) or 0)
         c.drawString(left, y, bucket)
         c.drawRightString(right, y, money(val))
         y -= 0.16 * inch
-        ensure_space(1.5 * inch)
-
-    if not any_rows:
-        c.setFont("Helvetica", 9)
-        c.drawString(left, y, "No savings buckets were included (all were $0).")
-        y -= 0.16 * inch
-
-    y -= 0.20 * inch
-    ensure_space(2.8 * inch)
-
-    # Product summary (selected modules)
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(left, y, "Product summary (selected modules)")
-    y -= 0.22 * inch
-    c.setFont("Helvetica", 10)
-
-    if not selected_modules:
-        c.drawString(left, y, "No modules selected.")
-        y -= 0.18 * inch
-    else:
-        for key in selected_modules:
-            item = MODULE_SUMMARIES.get(key)
-            if not item:
-                continue
-            title = item.get("title", key)
-            body = item.get("body", "")
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(left, y, title)
-            y -= 0.16 * inch
+        if y < 1.3 * inch:
+            _pdf_new_page(c, "Savings breakdown (continued)")
+            y = height - 1.05 * inch
             c.setFont("Helvetica", 9)
 
-            # Simple wrap
-            wrap_width = 105  # characters, approximate
-            words = body.split()
-            line = ""
-            lines = []
-            for w in words:
-                if len(line) + len(w) + 1 <= wrap_width:
-                    line = (line + " " + w).strip()
-                else:
-                    lines.append(line)
-                    line = w
-            if line:
-                lines.append(line)
-
-            for ln in lines:
-                c.drawString(left, y, ln)
-                y -= 0.14 * inch
-                ensure_space(1.2 * inch)
-
-            y -= 0.10 * inch
-            ensure_space(1.2 * inch)
-
-    y -= 0.10 * inch
-    ensure_space(2.2 * inch)
-
-    # Narrative (always include, but keep short)
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(left, y, "What drives the savings")
-    y -= 0.22 * inch
+    # Module summary (short)
+    _pdf_new_page(c, "What is included (selected modules)")
+    y = height - 1.05 * inch
     c.setFont("Helvetica", 10)
-    bullets = [
-        "Reduced supervisor time spent on manual QA review and follow-up.",
-        "Reduced dedicated QA labor required to score, document, and trend performance.",
-        "Reduced turnover and onboarding burden through faster feedback loops and targeted coaching.",
-        "Reduced training time via simulations and structured training workflows (when TRAIN is included).",
-    ]
-    for b in bullets:
-        c.drawString(left + 0.12 * inch, y, "- " + b)
+    for key in selected_modules:
+        item = MODULE_SUMMARIES.get(key)
+        if not item:
+            continue
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(left, y, item["title"])
         y -= 0.18 * inch
-        ensure_space(1.0 * inch)
-
-    y -= 0.10 * inch
-    ensure_space(1.6 * inch)
-
-    # Time saved (omit 0 values)
-    sup_week = float(inputs.get("Supervisor hours per week spent on QA", 0) or 0)
-    sup_red = float(inputs.get("Reduction in supervisor QA time (%)", 0) or 0) / 100.0
-    qa_fte = float(inputs.get("Dedicated QA specialists (FTE)", 0) or 0)
-    qa_red = float(inputs.get("Reduction in manual QA labor (%)", 0) or 0) / 100.0
-
-    sup_hours_saved = sup_week * 52 * sup_red
-    qa_hours_saved = qa_fte * 2080 * qa_red
-
-    if sup_hours_saved > 0 or qa_hours_saved > 0:
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(left, y, "Estimated time saved")
-        y -= 0.22 * inch
-        c.setFont("Helvetica", 10)
-
-        if sup_hours_saved > 0:
-            c.drawString(left + 0.12 * inch, y, f"- Supervisor time saved: ~{sup_hours_saved:,.0f} hours per year")
-            y -= 0.18 * inch
-        if qa_hours_saved > 0:
-            c.drawString(left + 0.12 * inch, y, f"- QA labor time saved: ~{qa_hours_saved:,.0f} hours per year")
-            y -= 0.18 * inch
+        c.setFont("Helvetica", 9)
+        # wrap text manually
+        words = item["body"].split()
+        line = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if len(test) > 95:
+                c.drawString(left, y, line)
+                y -= 0.14 * inch
+                line = w
+                if y < 1.2 * inch:
+                    _pdf_new_page(c, "What is included (continued)")
+                    y = height - 1.05 * inch
+                    c.setFont("Helvetica", 9)
+            else:
+                line = test
+        if line:
+            c.drawString(left, y, line)
+            y -= 0.20 * inch
+        y -= 0.10 * inch
 
     c.setFont("Helvetica", 8)
-    c.drawString(left, 0.6 * inch, "GovWorx | CommsCoach ROI Calculator. Estimates only; results depend on adoption and baseline practices.")
-    c.showPage()
+    c.drawString(left, 0.6 * inch, DISCLAIMER)
     c.save()
     buf.seek(0)
     return buf.read()
@@ -302,11 +268,15 @@ icon = str(FAVICON_PATH) if FAVICON_PATH.exists() else "ROI"
 st.set_page_config(page_title="GovWorx | CommsCoach ROI Calculator", page_icon=icon, layout="wide")
 
 st.title("GovWorx | CommsCoach ROI Calculator")
-st.caption("Estimate annual value, net benefit, ROI, and payback period for CommsCoach. Export to CSV, Excel, and PDF.")
+st.caption("Hour-based ROI model with split inputs, manual QA effort estimator, and customer-ready PDF export.")
 
+# ---------------------------
+# Sidebar inputs
+# ---------------------------
 with st.sidebar:
     st.subheader("Inputs")
     agency_name = st.text_input("Agency name (for exports)", value="")
+    scenario_name = st.text_input("Scenario name", value="Standard")
 
     st.markdown("#### Included CommsCoach modules")
     c1, c2 = st.columns(2)
@@ -330,50 +300,93 @@ with st.sidebar:
     st.markdown("#### Investment")
     annual_investment = st.number_input("Annual CommsCoach cost ($)", min_value=0.0, value=225000.0, step=5000.0)
 
-    st.markdown("#### Agency size")
+    st.markdown("#### Agency size (context)")
     annual_calls = st.number_input("Annual calls eligible for QA", min_value=0, value=600000, step=10000)
-    dispatchers = st.number_input("Number of dispatchers / telecommunicators", min_value=0, value=75, step=5)
+    dispatchers = st.number_input("Dispatchers / telecommunicators", min_value=0, value=75, step=5)
 
-    st.markdown("#### Manual QA baseline")
-    qa_specialists_fte = st.number_input("Dedicated QA specialists (FTE)", min_value=0.0, value=1.0, step=0.25)
-    qa_fte_fully_loaded_cost = st.number_input("QA specialist fully loaded annual cost ($)", min_value=0.0, value=95000.0, step=5000.0)
-    supervisor_hours_per_week_on_qa = st.number_input("Supervisor hours per week spent on QA", min_value=0.0, value=25.0, step=1.0)
+    st.markdown("#### Labor rates")
     supervisor_hourly_fully_loaded = st.number_input("Supervisor fully loaded hourly rate ($/hr)", min_value=0.0, value=110.0, step=1.0)
-    manual_qa_coverage_pct = st.number_input("Manual QA coverage (% of calls)", min_value=0.0, max_value=100.0, value=2.0, step=1.0)
 
-    st.markdown("#### CommsCoach impact")
-    qa_labor_reduction_pct = st.number_input("Reduction in manual QA labor (%)", min_value=0.0, max_value=100.0, value=70.0, step=5.0)
-    supervisor_time_reduction_pct = st.number_input("Reduction in supervisor QA time (%)", min_value=0.0, max_value=100.0, value=60.0, step=5.0)
+    qa_specialists_fte = st.number_input("QA specialists (FTE, baseline)", min_value=0.0, value=1.0, step=0.25)
+    qa_fte_fully_loaded_cost = st.number_input("QA specialist fully loaded annual cost ($)", min_value=0.0, value=140000.0, step=5000.0)
 
-    st.markdown("#### Turnover")
-    annual_turnover_pct = st.number_input("Annual dispatcher turnover (%)", min_value=0.0, max_value=100.0, value=12.0, step=1.0)
-    replacement_cost_per_dispatcher = st.number_input("Replacement cost per dispatcher ($)", min_value=0.0, value=35000.0, step=1000.0)
-    turnover_reduction_pct = st.number_input("Turnover reduction due to CommsCoach (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0)
-
-    st.markdown("#### Training")
-    new_hires_per_year = st.number_input("New hires per year", min_value=0, value=15, step=1)
-    training_hours_per_new_hire = st.number_input("Training hours per new hire", min_value=0.0, value=80.0, step=1.0)
+    trainers_count = st.number_input("Trainers (headcount, context)", min_value=0, value=2, step=1)
     trainer_hourly_fully_loaded = st.number_input("Trainer fully loaded hourly rate ($/hr)", min_value=0.0, value=95.0, step=1.0)
-    training_time_reduction_pct = st.number_input("Training time reduction (%)", min_value=0.0, max_value=100.0, value=15.0, step=1.0)
+
+    st.markdown("#### Manual QA baseline (context)")
+    supervisor_hours_per_week_on_qa = st.number_input("Supervisor hours per week currently spent on QA (total)", min_value=0.0, value=25.0, step=1.0)
+    manual_qa_coverage_pct = st.number_input("Manual QA coverage (% of calls)", min_value=0.0, max_value=100.0, value=2.0, step=0.5)
+
+    st.markdown("#### CommsCoach time savings (split inputs)")
+    st.caption("Enter hours saved per person per week. The calculator totals it and caps at baseline where applicable.")
+    supervisors_in_scope = st.number_input("Supervisors impacted (count)", min_value=0, value=4, step=1)
+    hours_saved_per_supervisor_week = st.number_input("Hours saved per supervisor per week", min_value=0.0, value=3.0, step=0.5)
+
+    qa_specialists_in_scope = st.number_input("QA staff impacted (count)", min_value=0, value=1, step=1)
+    hours_saved_per_qa_week = st.number_input("Hours saved per QA staff per week", min_value=0.0, value=4.0, step=0.5)
+
+    st.markdown("#### Training time savings (split inputs)")
+    new_hires_per_year = st.number_input("New hires per year", min_value=0, value=15, step=1)
+    training_hours_per_new_hire = st.number_input("Training hours per new hire (baseline)", min_value=0.0, value=80.0, step=1.0)
+    hours_saved_per_trainer_week = st.number_input("Hours saved per trainer per week", min_value=0.0, value=2.0, step=0.5)
+    # optional: per new hire savings
+    training_hours_saved_per_new_hire = st.number_input("Optional: hours saved per new hire (if known)", min_value=0.0, value=0.0, step=1.0)
+
+    st.markdown("#### Turnover (optional, count-based)")
+    st.caption("If you include retention impact, enter the number of dispatchers you believe this helps retain per year.")
+    dispatchers_retained_per_year = st.number_input("Dispatchers retained per year (count)", min_value=0.0, value=0.0, step=0.5)
+    replacement_cost_per_dispatcher = st.number_input("Replacement cost per dispatcher ($)", min_value=0.0, value=35000.0, step=1000.0)
 
     st.markdown("#### Optional value buckets")
     annual_productivity_value = st.number_input("Annual productivity / effectiveness value ($)", min_value=0.0, value=0.0, step=10000.0)
     annual_risk_reduction_value = st.number_input("Annual risk reduction value ($)", min_value=0.0, value=0.0, step=10000.0)
 
+    # Manual QA effort estimator
+    st.markdown("#### Manual QA effort estimator")
+    st.caption("Use this if the agency cannot estimate current QA effort. Outputs baseline QA hours based on coverage and review time.")
+    avg_qa_minutes_per_call = st.number_input("Average QA minutes per reviewed call", min_value=0.0, value=25.0, step=1.0)
+    include_playback_admin = st.toggle("Include admin time in QA minutes", value=True)
+
+# ---------------------------
+# Derived baseline estimates and caps
+# ---------------------------
 weeks_per_year = 52.0
-manual_qa_labor_cost = qa_specialists_fte * qa_fte_fully_loaded_cost
-manual_supervisor_qa_cost = supervisor_hours_per_week_on_qa * weeks_per_year * supervisor_hourly_fully_loaded
-manual_total_cost = manual_qa_labor_cost + manual_supervisor_qa_cost
+qa_hourly_loaded = qa_fte_fully_loaded_cost / 2080.0 if qa_fte_fully_loaded_cost else 0.0
 
-qa_labor_savings = manual_qa_labor_cost * (qa_labor_reduction_pct / 100.0)
-supervisor_time_savings = manual_supervisor_qa_cost * (supervisor_time_reduction_pct / 100.0)
+# Manual QA effort estimator (baseline QA hours/year)
+qa_coverage_ratio = max(0.0, min(1.0, manual_qa_coverage_pct / 100.0))
+qa_calls_reviewed_year = annual_calls * qa_coverage_ratio
+qa_minutes = avg_qa_minutes_per_call
+baseline_qa_hours_year_est = (qa_calls_reviewed_year * qa_minutes) / 60.0
+baseline_qa_hours_week_est = baseline_qa_hours_year_est / weeks_per_year if weeks_per_year else 0.0
 
-annual_turnovers = dispatchers * (annual_turnover_pct / 100.0)
-turnover_cost_baseline = annual_turnovers * replacement_cost_per_dispatcher
-turnover_savings = turnover_cost_baseline * (turnover_reduction_pct / 100.0)
+# Baseline capacity caps
+supervisor_baseline_hours_week = supervisor_hours_per_week_on_qa
+qa_baseline_hours_week_capacity = qa_specialists_fte * 40.0
 
-baseline_training_cost = new_hires_per_year * training_hours_per_new_hire * trainer_hourly_fully_loaded
-training_savings = baseline_training_cost * (training_time_reduction_pct / 100.0)
+# Saved hours computed from split inputs
+supervisor_hours_saved_week = supervisors_in_scope * hours_saved_per_supervisor_week
+qa_hours_saved_week = qa_specialists_in_scope * hours_saved_per_qa_week
+
+sup_hours_saved_week_capped = min(supervisor_hours_saved_week, supervisor_baseline_hours_week)
+
+# QA cap: if estimated baseline QA effort is larger than QA capacity, cap at the higher of the two? safest is cap at capacity.
+qa_hours_saved_week_capped = min(qa_hours_saved_week, qa_baseline_hours_week_capacity)
+
+# Training savings: pick the larger of (trainer weekly saved) vs (per new hire saved * hires / year / 52), but cap at baseline training hours.
+baseline_training_hours_year = new_hires_per_year * training_hours_per_new_hire
+training_hours_saved_year_from_trainers = trainers_count * hours_saved_per_trainer_week * weeks_per_year
+training_hours_saved_year_from_hires = training_hours_saved_per_new_hire * new_hires_per_year
+training_hours_saved_year_raw = max(training_hours_saved_year_from_trainers, training_hours_saved_year_from_hires)
+training_hours_saved_year_capped = min(training_hours_saved_year_raw, baseline_training_hours_year)
+
+# ---------------------------
+# Savings calculations (hour-based)
+# ---------------------------
+supervisor_time_savings = sup_hours_saved_week_capped * weeks_per_year * supervisor_hourly_fully_loaded
+qa_labor_savings = qa_hours_saved_week_capped * weeks_per_year * qa_hourly_loaded
+training_savings = training_hours_saved_year_capped * trainer_hourly_fully_loaded
+turnover_savings = dispatchers_retained_per_year * replacement_cost_per_dispatcher
 
 total_gross_savings = (
     qa_labor_savings
@@ -389,15 +402,24 @@ payback_months = (annual_investment / total_gross_savings) * 12.0 if total_gross
 
 breakdown_df = pd.DataFrame(
     [
-        {"Bucket": "QA specialist labor savings", "Annual Value ($)": qa_labor_savings},
-        {"Bucket": "Supervisor time savings", "Annual Value ($)": supervisor_time_savings},
-        {"Bucket": "Turnover savings", "Annual Value ($)": turnover_savings},
-        {"Bucket": "Training savings", "Annual Value ($)": training_savings},
+        {"Bucket": "QA labor savings (hour-based)", "Annual Value ($)": qa_labor_savings},
+        {"Bucket": "Supervisor time savings (hour-based)", "Annual Value ($)": supervisor_time_savings},
+        {"Bucket": "Turnover savings (dispatchers retained)", "Annual Value ($)": turnover_savings},
+        {"Bucket": "Training savings (hour-based)", "Annual Value ($)": training_savings},
         {"Bucket": "Productivity value", "Annual Value ($)": annual_productivity_value},
         {"Bucket": "Risk reduction value", "Annual Value ($)": annual_risk_reduction_value},
     ]
 )
 
+baseline_estimates = {
+    "supervisor_hours_saved_year": sup_hours_saved_week_capped * weeks_per_year,
+    "qa_hours_saved_year": qa_hours_saved_week_capped * weeks_per_year,
+    "training_hours_saved_year": training_hours_saved_year_capped,
+}
+
+# ---------------------------
+# Page outputs
+# ---------------------------
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Annual Gross Savings", money(total_gross_savings))
 m2.metric("Annual Investment", money(annual_investment))
@@ -428,38 +450,64 @@ with left:
                 st.write(item["body"])
 
 with right:
-    st.subheader("Context")
+    st.subheader("Manual QA effort estimator (baseline)")
     st.markdown(
         f"""
-- Manual QA labor baseline: **{money(manual_qa_labor_cost)}**
-- Manual supervisor QA baseline: **{money(manual_supervisor_qa_cost)}**
-- Manual total QA baseline: **{money(manual_total_cost)}**
-- Annual turnovers at baseline: **{annual_turnovers:,.1f}**
-- Turnover cost baseline: **{money(turnover_cost_baseline)}**
-- Baseline training cost: **{money(baseline_training_cost)}**
+- Calls reviewed/year: **{qa_calls_reviewed_year:,.0f}** (coverage {manual_qa_coverage_pct:.1f}% of {annual_calls:,})
+- Avg QA minutes per reviewed call: **{avg_qa_minutes_per_call:.0f}**
+- Estimated baseline QA hours/year: **{baseline_qa_hours_year_est:,.0f}**
+- Estimated baseline QA hours/week: **{baseline_qa_hours_week_est:,.1f}**
+"""
+    )
+
+    st.subheader("Caps and time-saved inputs")
+    st.markdown(
+        f"""
+- Supervisor baseline QA time: **{supervisor_baseline_hours_week:,.1f} hrs/week**
+- Supervisor hours saved (entered): **{supervisor_hours_saved_week:,.1f} hrs/week**
+- Supervisor hours saved (capped): **{sup_hours_saved_week_capped:,.1f} hrs/week**
+
+- QA baseline capacity: **{qa_baseline_hours_week_capacity:,.1f} hrs/week** ({qa_specialists_fte:.2f} FTE)
+- QA hours saved (entered): **{qa_hours_saved_week:,.1f} hrs/week**
+- QA hours saved (capped): **{qa_hours_saved_week_capped:,.1f} hrs/week**
+
+- Training baseline: **{baseline_training_hours_year:,.0f} hrs/year**
+- Training hours saved (capped): **{training_hours_saved_year_capped:,.0f} hrs/year**
 """
     )
 
 st.subheader("Export")
 
 inputs = {
+    "Agency name": agency_name,
+    "Scenario name": scenario_name,
+    "Modules selected": ", ".join(selected_modules),
     "Annual CommsCoach cost ($)": annual_investment,
     "Annual calls eligible for QA": annual_calls,
     "Dispatchers / telecommunicators": dispatchers,
-    "Dedicated QA specialists (FTE)": qa_specialists_fte,
+    "Supervisor fully loaded hourly rate ($/hr)": supervisor_hourly_fully_loaded,
+    "QA specialists (FTE, baseline)": qa_specialists_fte,
     "QA specialist fully loaded annual cost ($)": qa_fte_fully_loaded_cost,
-    "Supervisor hours per week spent on QA": supervisor_hours_per_week_on_qa,
-    "Supervisor hourly fully loaded rate ($/hr)": supervisor_hourly_fully_loaded,
-    "Manual QA coverage (%)": manual_qa_coverage_pct,
-    "Reduction in manual QA labor (%)": qa_labor_reduction_pct,
-    "Reduction in supervisor QA time (%)": supervisor_time_reduction_pct,
-    "Annual dispatcher turnover (%)": annual_turnover_pct,
-    "Replacement cost per dispatcher ($)": replacement_cost_per_dispatcher,
-    "Turnover reduction due to CommsCoach (%)": turnover_reduction_pct,
+    "Trainer hourly fully loaded rate ($/hr)": trainer_hourly_fully_loaded,
+    "Supervisors impacted (count)": supervisors_in_scope,
+    "Hours saved per supervisor per week": hours_saved_per_supervisor_week,
+    "Supervisor hours saved per week (total)": supervisor_hours_saved_week,
+    "Supervisor hours saved per week (capped)": sup_hours_saved_week_capped,
+    "QA staff impacted (count)": qa_specialists_in_scope,
+    "Hours saved per QA staff per week": hours_saved_per_qa_week,
+    "QA hours saved per week (total)": qa_hours_saved_week,
+    "QA hours saved per week (capped)": qa_hours_saved_week_capped,
+    "Trainers (headcount, context)": trainers_count,
+    "Hours saved per trainer per week": hours_saved_per_trainer_week,
     "New hires per year": new_hires_per_year,
-    "Training hours per new hire": training_hours_per_new_hire,
-    "Trainer fully loaded hourly rate ($/hr)": trainer_hourly_fully_loaded,
-    "Training time reduction (%)": training_time_reduction_pct,
+    "Training hours per new hire (baseline)": training_hours_per_new_hire,
+    "Optional: hours saved per new hire": training_hours_saved_per_new_hire,
+    "Training hours saved per year (capped)": training_hours_saved_year_capped,
+    "Manual QA coverage (%)": manual_qa_coverage_pct,
+    "Avg QA minutes per reviewed call": avg_qa_minutes_per_call,
+    "Estimated baseline QA hours/year": baseline_qa_hours_year_est,
+    "Dispatchers retained per year (count)": dispatchers_retained_per_year,
+    "Replacement cost per dispatcher ($)": replacement_cost_per_dispatcher,
     "Annual productivity / effectiveness value ($)": annual_productivity_value,
     "Annual risk reduction value ($)": annual_risk_reduction_value,
 }
@@ -485,11 +533,14 @@ st.download_button(
 
 pdf_bytes = build_pdf_report(
     agency_name=agency_name,
+    scenario_name=scenario_name,
     selected_modules=selected_modules,
     inputs=inputs,
     results=results,
     breakdown_df=breakdown_df,
+    baseline_estimates=baseline_estimates,
     logo_path=LOGO_PATH if LOGO_PATH.exists() else None,
 )
 pdf_name = f"{agency_name.strip().replace(' ', '_')}_CommsCoach_ROI_Summary.pdf" if agency_name.strip() else "CommsCoach_ROI_Summary.pdf"
 st.download_button("Download results as PDF", data=pdf_bytes, file_name=pdf_name, mime="application/pdf")
+st.caption(DISCLAIMER)

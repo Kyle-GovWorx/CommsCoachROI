@@ -21,6 +21,7 @@ DISCLAIMER = (
 APP_DIR = Path(__file__).parent
 ASSETS = APP_DIR / "assets"
 LOGO_PATH = ASSETS / "commscoach_logo_reverse.png"
+LOGO_PDF_PATH = ASSETS / "commscoach_logo_navy.png"
 FAVICON_PATH = ASSETS / "favicon.png"
 
 MODULE_SUMMARIES = {
@@ -111,9 +112,13 @@ def build_pdf_report(
     y = height - 0.75 * inch
 
     # COVER PAGE
-    if logo_path and logo_path.exists():
+    pdf_logo = logo_path
+    if "LOGO_PDF_PATH" in globals() and LOGO_PDF_PATH.exists():
+        pdf_logo = LOGO_PDF_PATH
+
+    if pdf_logo and pdf_logo.exists():
         try:
-            img = ImageReader(str(logo_path))
+            img = ImageReader(str(pdf_logo))
             c.drawImage(img, left, y - 0.55 * inch, width=3.0 * inch, height=0.55 * inch, mask="auto")
         except Exception:
             pass

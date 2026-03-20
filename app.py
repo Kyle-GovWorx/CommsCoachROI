@@ -461,7 +461,7 @@ baseline_qa_hours_week_est = baseline_qa_hours_year_est / weeks_per_year if week
 # If the agency does not know this number, estimate it from the manual QA effort estimator by assuming
 # supervisors cover QA work that exceeds dedicated QA capacity (QA FTE * 40 hrs/week).
 if estimate_missing_baselines:
-    supervisor_baseline_hours_week = max(0.0, baseline_qa_hours_week_est - qa_baseline_hours_week_capacity)
+    supervisor_baseline_hours_week = max(0.0, baseline_qa_hours_week_est - (qa_specialists_fte * 40.0))
 else:
     supervisor_baseline_hours_week = supervisor_hours_per_week_on_qa_manual
 qa_baseline_hours_week_capacity = qa_specialists_fte * 40.0

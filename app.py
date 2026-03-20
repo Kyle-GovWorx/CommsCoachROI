@@ -339,7 +339,14 @@ with st.sidebar:
     trainer_hourly_fully_loaded = st.number_input("Trainer fully loaded hourly rate ($/hr)", min_value=0.0, value=95.0, step=1.0)
 
     st.markdown("#### Manual QA baseline (context)")
-    supervisor_hours_per_week_on_qa = st.number_input("Supervisor hours per week currently spent on QA (total)", min_value=0.0, value=25.0, step=1.0)
+    estimate_missing_baselines = st.toggle("Agency does not have baseline metrics (estimate for me)", value=True)
+    supervisor_hours_per_week_on_qa_manual = st.number_input(
+        "Supervisor hours per week currently spent on QA (total)",
+        min_value=0.0,
+        value=25.0,
+        step=1.0,
+        disabled=estimate_missing_baselines,
+    )
     manual_qa_coverage_pct = st.number_input("Manual QA coverage (% of calls)", min_value=0.0, max_value=100.0, value=2.0, step=0.5)
 
     st.markdown("#### CommsCoach time savings (split inputs)")
@@ -353,14 +360,66 @@ with st.sidebar:
     st.markdown("#### Training time savings (split inputs)")
     new_hires_per_year = st.number_input("New hires per year", min_value=0, value=15, step=1)
     training_hours_per_new_hire = st.number_input("Training hours per new hire (baseline)", min_value=0.0, value=80.0, step=1.0)
-    hours_saved_per_trainer_week = st.number_input("Hours saved per trainer per week", min_value=0.0, value=2.0, step=0.5)
+    # Hours saved per trainer per week (auto-estimated if baseline metrics are unknown)
+    trainer_hours_saved_default = 2.0
+    if estimate_missing_baselines:
+        # Conservative default for automating daily observation reports + roleplay/sim admin
+        trainer_hours_saved_default = 2.0
+
+    hours_saved_per_trainer_week = st.number_input(
+        "Hours saved per trainer per week (DOR + roleplay admin)",
+        min_value=0.0,
+        value=float(trainer_hours_saved_default),
+        step=0.5,
+        disabled=estimate_missing_baselines,
+    )
     # optional: per new hire savings
     training_hours_saved_per_new_hire = st.number_input("Optional: hours saved per new hire (if known)", min_value=0.0, value=0.0, step=1.0)
 
     st.markdown("#### Turnover (optional, count-based)")
     st.caption("If you include retention impact, enter the number of dispatchers you believe this helps retain per year.")
     dispatchers_retained_per_year = st.number_input("Dispatchers retained per year (count)", min_value=0.0, value=0.0, step=0.5)
-    replacement_cost_per_dispatcher = st.number_input("Replacement cost per dispatcher ($)", min_value=0.0, value=35000.0, step=1000.0)
+    # Replacement cost per dispatcher (auto-estimated if baseline metrics are unknown)
+    # Leadership-defensible defaults:
+    # - $50k conservative baseline
+    # - $75k typical mid case (often cited by centers as closer to reality)
+    # - $100k higher-end case sometimes cited for fully trained replacement
+    #
+    # References used to set these options:
+    # - EMSWorld (HMP Global) reports ~ $100k to replace a fully trained 9-1-1 operator in one cited example.
+    # - CritiCall highlights that costs stack when multiple trainees wash out before one stays.
+    if estimate_missing_baselines:
+        replacement_cost_choice = st.selectbox(
+            "Replacement cost per dispatcher (estimate)",
+            options=[50000, 75000, 100000],
+            index=1,
+            format_func=lambda x: f"${x:,.0f}",
+            help=(
+                "Estimate of the all-in cost to replace one dispatcher (recruiting, hiring, onboarding, training time, and staffing impact). "
+                "Use $50k for a conservative case, $75k for a typical mid case, or $100k for a higher-end case. "
+                "Optional washout factor below can account for the reality that it may take multiple trainees to get one who stays."
+            ),
+        )
+        washout_factor = st.slider(
+            "Washout factor (optional)",
+            min_value=1.0,
+            max_value=2.0,
+            value=1.0,
+            step=0.1,
+            help=(
+                "If it often takes more than one trainee to fill one seat (for example, 1.3x), this increases the effective replacement cost accordingly. "
+                "Set to 1.0x to disable."
+            ),
+        )
+        replacement_cost_per_dispatcher = float(replacement_cost_choice) * float(washout_factor)
+    else:
+        washout_factor = 1.0
+        replacement_cost_per_dispatcher = st.number_input(
+            "Replacement cost per dispatcher ($)",
+            min_value=0.0,
+            value=75000.0,
+            step=1000.0,
+        )
 
     st.markdown("#### Optional value buckets")
     annual_productivity_value = st.number_input("Annual productivity / effectiveness value ($)", min_value=0.0, value=0.0, step=10000.0)
@@ -369,7 +428,19 @@ with st.sidebar:
     # Manual QA effort estimator
     st.markdown("#### Manual QA effort estimator")
     st.caption("Use this if the agency cannot estimate current QA effort. Outputs baseline QA hours based on coverage and review time.")
-    avg_qa_minutes_per_call = st.number_input("Average QA minutes per reviewed call", min_value=0.0, value=25.0, step=1.0)
+    # Average QA minutes per reviewed call (auto-estimated if baseline metrics are unknown)
+    qa_minutes_default = 25.0
+    if estimate_missing_baselines:
+        # Common manual QA range for a 5-minute call is ~20-30 minutes including playback + notes.
+        qa_minutes_default = 25.0
+
+    avg_qa_minutes_per_call = st.number_input(
+        "Average QA minutes per reviewed call",
+        min_value=0.0,
+        value=float(qa_minutes_default),
+        step=1.0,
+        disabled=estimate_missing_baselines,
+    )
     include_playback_admin = st.toggle("Include admin time in QA minutes", value=True)
 
 # ---------------------------
@@ -386,7 +457,13 @@ baseline_qa_hours_year_est = (qa_calls_reviewed_year * qa_minutes) / 60.0
 baseline_qa_hours_week_est = baseline_qa_hours_year_est / weeks_per_year if weeks_per_year else 0.0
 
 # Baseline capacity caps
-supervisor_baseline_hours_week = supervisor_hours_per_week_on_qa
+# Supervisor baseline QA hours/week:
+# If the agency does not know this number, estimate it from the manual QA effort estimator by assuming
+# supervisors cover QA work that exceeds dedicated QA capacity (QA FTE * 40 hrs/week).
+if estimate_missing_baselines:
+    supervisor_baseline_hours_week = max(0.0, baseline_qa_hours_week_est - qa_baseline_hours_week_capacity)
+else:
+    supervisor_baseline_hours_week = supervisor_hours_per_week_on_qa_manual
 qa_baseline_hours_week_capacity = qa_specialists_fte * 40.0
 
 # Saved hours computed from split inputs
@@ -488,7 +565,7 @@ with right:
     st.subheader("Caps and time-saved inputs")
     st.markdown(
         f"""
-- Supervisor baseline QA time: **{supervisor_baseline_hours_week:,.1f} hrs/week**
+- Supervisor baseline QA time (estimated or provided): **{supervisor_baseline_hours_week:,.1f} hrs/week**
 - Supervisor hours saved (entered): **{supervisor_hours_saved_week:,.1f} hrs/week**
 - Supervisor hours saved (capped): **{sup_hours_saved_week_capped:,.1f} hrs/week**
 
@@ -506,6 +583,7 @@ st.subheader("Export")
 inputs = {
     "Agency name": agency_name,
     "Scenario name": scenario_name,
+    "Baseline metrics estimated?": estimate_missing_baselines,
     "Modules selected": ", ".join(selected_modules),
     "Annual CommsCoach cost ($)": annual_investment,
     "Annual calls eligible for QA": annual_calls,
@@ -533,6 +611,7 @@ inputs = {
     "Estimated baseline QA hours/year": baseline_qa_hours_year_est,
     "Dispatchers retained per year (count)": dispatchers_retained_per_year,
     "Replacement cost per dispatcher ($)": replacement_cost_per_dispatcher,
+    "Washout factor (if estimated)": washout_factor,
     "Annual productivity / effectiveness value ($)": annual_productivity_value,
     "Annual risk reduction value ($)": annual_risk_reduction_value,
 }

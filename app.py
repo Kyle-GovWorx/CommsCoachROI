@@ -270,5 +270,3 @@ def build_pdf_report(
         _set_fill(c, PDF_TEXT_WH)
         c.setFont("Helvetica-Bold", 16)
         c.drawString(tx + 6, ty + 10, val)
-
-1Password menu is available. Press down arrow to select.
